@@ -354,6 +354,8 @@ export const APPLE_DB: Record<string, { ram: number; bw: number; cpuCores: numbe
   // Criterio usado:
   // - aquí lo dejo en configuración "máxima" del chip dentro de una familia,
   //   para que la tabla sea consistente entre Pro/Max/Ultra.
+  "m6": { ram: 16, bw: 170, cpuCores: 12, gpuCores: 12 },
+  "m5 ultra": { ram: 96, bw: 1200, cpuCores: 36, gpuCores: 80 },
   "m5 max": { ram: 36, bw: 614, cpuCores: 18, gpuCores: 40 }, // corregido
   "m5 pro": { ram: 24, bw: 307, cpuCores: 18, gpuCores: 20 }, // corregido
   "m5": { ram: 16, bw: 153, cpuCores: 10, gpuCores: 10 }, // corregido bw
@@ -535,10 +537,10 @@ function identifyAppleChip(signals: {
       score += 20 * Math.max(0, 1 - diff / 8);
     }
 
-    // CPU benchmark → chip generation (M1≈67, M2≈82, M3≈95, M4≈107, M5≈120)
+    // CPU benchmark → chip generation (M1≈67, M2≈82, M3≈95, M4≈107, M5≈120, M6≈132)
     const gen = parseInt(chip.match(/m(\d)/)?.[1] || "0");
     if (gen > 0 && cpuBenchmark > 0) {
-      const centers: Record<number, number> = { 1: 67, 2: 82, 3: 95, 4: 107, 5: 120 };
+      const centers: Record<number, number> = { 1: 67, 2: 82, 3: 95, 4: 107, 5: 120, 6: 132 };
       const center = centers[gen] ?? 67;
       const diff = Math.abs(cpuBenchmark - center);
       score += Math.max(0, 10 - diff * 0.4);
@@ -612,7 +614,7 @@ export function matchApple(renderer: string): { ram: number; bw: number; cpuCore
 
 export function isAppleSiliconCheck(renderer: string): boolean {
   const r = renderer.toLowerCase();
-  return r.includes("apple") && (r.includes("m1") || r.includes("m2") || r.includes("m3") || r.includes("m4") || r.includes("m5") || r.includes("gpu"));
+  return r.includes("apple") && (r.includes("m1") || r.includes("m2") || r.includes("m3") || r.includes("m4") || r.includes("m5") || r.includes("m6") || r.includes("gpu"));
 }
 
 export function cleanGPUName(renderer: string): string {
@@ -1500,7 +1502,7 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
 
 export const RAM_OPTIONS = [2, 4, 6, 8, 12, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 384, 512];
 export const SYSTEM_RAM_OPTIONS = [4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
-export const BW_OPTIONS = [50, 68, 100, 120, 150, 153, 200, 224, 256, 273, 288, 300, 307, 346, 360, 408, 432, 448, 504, 546, 614, 672, 768, 819, 960, 1008, 1024, 1792, 2039, 3350, 4000];
+export const BW_OPTIONS = [50, 68, 100, 120, 150, 153, 170, 200, 224, 256, 273, 288, 300, 307, 346, 360, 408, 432, 448, 504, 546, 614, 672, 768, 819, 960, 1008, 1024, 1200, 1792, 2039, 3350, 4000];
 export function buildSelectOptions(presets: number[], detected: number | null): number[] {
   const set = new Set(presets);
   if (detected !== null && detected > 0) set.add(detected);
