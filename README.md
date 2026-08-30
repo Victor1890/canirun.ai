@@ -190,7 +190,8 @@ Open [localhost:4321](http://localhost:4321) to see the site.
 packages/
 ├── models/
 │   └── src/index.ts        # 90+ AI model definitions with quant calculations (edit here)
-├── compatibility/           # Hardware ↔ model compatibility scoring engine
+├── compatibility/
+│   └── src/index.ts        # GPU/Apple/Mobile DBs + compatibility scoring (edit here)
 └── runai/                   # CLI for running models locally
 
 src/
@@ -198,7 +199,7 @@ src/
 │   ├── models.ts            # Re-exports @canirun/models (built from packages/models)
 │   └── hf-stats.json        # HuggingFace download/like counts
 ├── lib/
-│   ├── hardware.ts         # Client-side hardware detection engine
+│   ├── hardware.ts         # Re-exports @canirun/compatibility
 │   └── og.ts               # OG image generation utilities
 ├── pages/
 │   ├── index.astro         # Home — model grid with filters & search
@@ -220,7 +221,7 @@ src/
 Contributions are welcome! Some ways to help:
 
 - **Add a model** — add an entry to the `STATIC_MODELS` array in `packages/models/src/index.ts` following the existing pattern (the `AIModel` interface at the top of that file).
-- **Improve hardware detection** — extend the GPU/Apple/Mobile databases in `src/lib/hardware.ts`
+- **Improve hardware detection** — extend the GPU/Apple/Mobile databases in `packages/compatibility/src/index.ts`
 - **Report inaccurate results** — open an issue with your hardware info and the model in question
 - **Fix bugs or improve UI** — PRs are appreciated
 
