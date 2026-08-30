@@ -1,5 +1,5 @@
 {
-  "name": "runai",
+  "name": "@canirun/runai",
   "version": "0.2.1",
   "description": "Local AI runtime with hardware-aware recommendations and OpenAI-compatible API",
   "module": "dist/cli.js",

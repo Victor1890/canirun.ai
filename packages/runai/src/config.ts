@@ -31,8 +31,9 @@ export const RUNAI_UPDATE_CHECK_TTL_MS = Math.max(
   0,
   envNumber("RUNAI_UPDATE_CHECK_TTL", 86_400) * 1000,
 );
+export const RUNAI_NPM_PACKAGE = "@canirun/runai";
 export const RUNAI_NPM_LATEST_URL = process.env.RUNAI_NPM_LATEST_URL
-  || "https://registry.npmjs.org/runai/latest";
+  || "https://registry.npmjs.org/@canirun%2Frunai/latest";
 export const RUNAI_GITHUB_RELEASES_URL = process.env.RUNAI_GITHUB_RELEASES_URL
   || "https://api.github.com/repos/midudev/canirun.ai/releases/latest";
 export const OLLAMA_MODEL_DIR = process.env.OLLAMA_MODELS || join(homedir(), ".ollama", "models");

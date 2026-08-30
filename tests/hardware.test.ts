@@ -209,6 +209,8 @@ describe("getGPUCategory", () => {
     it.each([
       ["Arc A770", "Intel Arc"],
       ["Arc A750", "Intel Arc"],
+      ["Arc Pro B60", "Intel Arc"],
+      ["Arc Pro B70", "Intel Arc"],
       ["Iris Xe", "Intel Integrated"],
       ["UHD 770", "Intel Integrated"],
     ])("%s → %s", (name, expected) => {
@@ -302,6 +304,22 @@ describe("matchGPU", () => {
     const result = matchGPU("Intel(R) Arc(TM) A770 Graphics");
     expect(result).not.toBeNull();
     expect(result!.vram).toBe(16);
+  });
+
+  it("matches Intel Arc Pro B60", () => {
+    const result = matchGPU("Intel(R) Arc(TM) Pro B60 Graphics");
+    expect(result).not.toBeNull();
+    expect(result!.vram).toBe(24);
+    expect(result!.bw).toBe(456);
+    expect(result!.cores).toBe(2560);
+  });
+
+  it("matches Intel Arc Pro B70", () => {
+    const result = matchGPU("Intel Arc Pro B70");
+    expect(result).not.toBeNull();
+    expect(result!.vram).toBe(32);
+    expect(result!.bw).toBe(608);
+    expect(result!.cores).toBe(4096);
   });
 
   it("returns null for unknown GPUs", () => {

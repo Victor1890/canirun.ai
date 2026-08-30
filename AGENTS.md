@@ -1,22 +1,22 @@
 # AGENTS.md
 
-Instrucciones para agentes que trabajen en este repositorio.
+Instructions for agents working in this repository.
 
-## Verificaciones automáticas
+## Automatic checks
 
-**No ejecutes verificación de tipos ni linters salvo que se te pida explícitamente.**
+**Do not run typechecking or linters unless you are explicitly asked to.**
 
-Eso incluye, entre otros:
+That includes, among others:
 
 - `pnpm astro check` / `astro check`
 - `tsc`, `tsc --noEmit`, `pnpm packages:typecheck`
-- `eslint`, `pnpm lint`, cualquier comando de linting
-- `pnpm test` / `vitest` salvo petición expresa
+- `eslint`, `pnpm lint`, or any other lint command
+- `pnpm test` / `vitest` unless explicitly requested
 
-Razón: estos comandos son largos en este proyecto y rara vez aportan información que el agente no pueda obtener con `ReadLints` puntual sobre los ficheros modificados. Confía en `ReadLints` y en la inspección manual a no ser que el usuario pida lo contrario.
+Reason: these commands are slow in this project and rarely tell the agent anything that `ReadLints` on the edited files would not. Trust `ReadLints` and manual inspection unless the user asks otherwise.
 
-Si el usuario dice algo como "verifica tipos", "pasa el typecheck", "corre los tests", "lint el proyecto" o equivalentes, entonces sí debes ejecutarlos.
+If the user says something like "check types", "run the typecheck", "run the tests", "lint the project", or equivalent, then you should run them.
 
-## Gestor de paquetes
+## Package manager
 
-Usa siempre `pnpm` salvo que exista `bun.lock` en el subpaquete (entonces usa `bun`). Nunca `npm`.
+Always use `pnpm` unless a `bun.lock` exists in the subpackage (then use `bun`). Never `npm`.

@@ -7,7 +7,7 @@ alwaysApply: false
 Use pnpm for dependency installation and package scripts in this package.
 
 - Use `pnpm install` from the workspace root.
-- Use `pnpm --filter runai <script>` when invoking runai scripts from the root.
+- Use `pnpm --filter @canirun/runai <script>` when invoking runai scripts from the root.
 - Do not add npm, Yarn, or Bun lockfiles.
 - Avoid `npm`, `yarn`, `npx`, `bun install`, and `bun run` for package management.
 
@@ -18,7 +18,7 @@ The CLI still targets the Bun runtime in implementation code. Keep runtime APIs 
 
 ## Testing
 
-Use `pnpm test` or `pnpm --filter runai test` to run tests.
+Use `pnpm test` or `pnpm --filter @canirun/runai test` to run tests.
 
 ```ts#index.test.ts
 import { expect, test } from "vitest";

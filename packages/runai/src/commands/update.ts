@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import { hasFlag } from "../cli-utils";
+import { RUNAI_NPM_PACKAGE } from "../config";
 import { checkForCliUpdate, isSourceCheckout } from "../update";
 
 const INSTALL_HINT = "curl -fsSL https://canirun.ai/runai/install.sh | bash";
@@ -48,7 +49,7 @@ export async function handleUpdate(args: string[]): Promise<void> {
   if (isSourceCheckout()) {
     p.log.info("This is a source checkout. Pull the repo instead of updating the published CLI:");
     p.log.info("  git pull");
-    p.log.info("  pnpm --filter runai build");
+    p.log.info("  pnpm --filter @canirun/runai build");
     return;
   }
 
@@ -73,7 +74,7 @@ export async function handleUpdate(args: string[]): Promise<void> {
   }
 
   p.log.step(`Updating runai to ${update.latest}...`);
-  const proc = Bun.spawn([pnpm, "add", "--global", "runai@latest"], {
+  const proc = Bun.spawn([pnpm, "add", "--global", `${RUNAI_NPM_PACKAGE}@latest`], {
     stdout: "inherit",
     stderr: "inherit",
     stdin: "ignore",

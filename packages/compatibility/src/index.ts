@@ -178,6 +178,8 @@ export const GPU_DB: Record<string, { vram: number; bw: number; cores: number }>
   "Arc A750": { vram: 8, bw: 512, cores: 3584 },
   "Arc A580": { vram: 8, bw: 512, cores: 3072 },
   "Arc A380": { vram: 6, bw: 186, cores: 1024 },
+  "Arc Pro B70": { vram: 32, bw: 608, cores: 4096 }, // 32 Xe2-cores × 128, GDDR6 256-bit
+  "Arc Pro B60": { vram: 24, bw: 456, cores: 2560 }, // 20 Xe2-cores × 128, GDDR6 192-bit
 
   // GTX 16 series
   // Source: NVIDIA official GeForce compare/specs
@@ -1505,7 +1507,7 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
 
 export const RAM_OPTIONS = [2, 4, 6, 8, 12, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 384, 512];
 export const SYSTEM_RAM_OPTIONS = [4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
-export const BW_OPTIONS = [50, 68, 100, 120, 150, 153, 170, 200, 224, 256, 273, 288, 300, 307, 346, 360, 408, 432, 448, 504, 546, 614, 672, 768, 819, 960, 1008, 1024, 1200, 1792, 2039, 3350, 4000];
+export const BW_OPTIONS = [50, 68, 100, 120, 150, 153, 170, 200, 224, 256, 273, 288, 300, 307, 346, 360, 408, 432, 448, 456, 504, 546, 608, 614, 672, 768, 819, 960, 1008, 1024, 1200, 1792, 2039, 3350, 4000];
 export function buildSelectOptions(presets: number[], detected: number | null): number[] {
   const set = new Set(presets);
   if (detected !== null && detected > 0) set.add(detected);

@@ -69,7 +69,8 @@ if ! pnpm bin --global >/dev/null 2>&1; then
 fi
 
 echo "Installing runai globally with pnpm..."
-pnpm add --global runai@latest
+# Unscoped `runai` on npm is a different CLI (Run:ai / NVIDIA). This package is @canirun/runai.
+pnpm add --global @canirun/runai@latest
 
 echo "Checking the installation..."
 runai doctor || {
