@@ -1342,6 +1342,10 @@ export function scoreToGrade(score: number, status: ModelStatus): Grade {
     if (score >= 40) return "C";
     return "D";
   }
+  // A tight fit still fits. Without a floor it can score below `can-run-slow`,
+  // which does not fit at all and falls back to system RAM — leaving the model
+  // labelled "Too heavy" while a strictly worse outcome reads "Barely runs".
+  if (status === "tight" && score < 20) return "D";
   if (score >= 85) return "S";
   if (score >= 70) return "A";
   if (score >= 55) return "B";
@@ -1358,9 +1362,19 @@ export interface ModelEvaluation {
   grade: Grade;
 }
 
+/** Mirrors `MemoryProfile` in @canirun/models. Kept local to avoid a package cycle. */
+export type MemoryProfile = "autoregressive" | "diffusion";
+
 export interface ModelEvaluationOptions {
   /** Parameters active per token. Fit and memory usage still use total VRAM. */
   activeParamsBillions?: number;
+  /**
+   * Defaults to `autoregressive`. `diffusion` suppresses the tokens/s estimate:
+   * image and video generators do not emit tokens, and their runtime is bound by
+   * the denoising loop rather than by memory bandwidth, so the bandwidth roofline
+   * below does not describe them.
+   */
+  memoryProfile?: MemoryProfile;
 }
 
 export function evaluateModelComplete(
@@ -1377,9 +1391,11 @@ export function evaluateModelComplete(
     ? Math.max(0.5, vramGB * (activeParams / paramsBillions))
     : vramGB;
   const status = evaluateModel(vramGB, hw);
-  const toksPerSec = estimateTokensPerSecond(speedWorkingSetGB, hw, {
-    residentModelGB: vramGB,
-  });
+  // `computeScore` falls back to a neutral speed term when this is null, so the
+  // grade rests on fit and memory headroom — the parts that do transfer.
+  const toksPerSec = options.memoryProfile === "diffusion"
+    ? null
+    : estimateTokensPerSecond(speedWorkingSetGB, hw, { residentModelGB: vramGB });
   const memPct = memoryPercentage(vramGB, hw);
   const score = computeScore(status, toksPerSec, paramsBillions, memPct);
   const grade = scoreToGrade(score, status);
