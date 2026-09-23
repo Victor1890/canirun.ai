@@ -13,6 +13,18 @@ export interface HardwareInfo {
   webgpuDevice: string | null;
   webgpuArch: string | null;
   isAppleSilicon: boolean;
+  /**
+   * Shared memory that is not Apple Silicon: integrated GPUs and SBCs.
+   * Phones use `isMobile` and Macs use `isAppleSilicon`.
+   */
+  isUnifiedMemory?: boolean;
+  /** Single-board computer. Bandwidth stays on the catalog value. */
+  isSbc?: boolean;
+  /**
+   * How many identical discrete GPUs to score. Capacity and the bandwidth
+   * roofline both scale with this count. Mixed GPU models are not combined.
+   */
+  gpuCount?: number;
   totalUsableRAM: number | null;
   platform: string | null;
   cpuBenchmark: number | null;
@@ -325,6 +337,10 @@ export const GPU_DB: Record<string, { vram: number; bw: number; cores: number }>
   "RX 9070": { vram: 16, bw: 640, cores: 3584 }, // corregido
   "RX 9060 XT 8GB": { vram: 8, bw: 320, cores: 2048 }, // Navi 44, GDDR6 128-bit 20Gbps
   "RX 9060 XT": { vram: 16, bw: 320, cores: 2048 }, // Navi 44, 16 GB SKU (default when size is omitted)
+
+  // AMD Radeon AI PRO (RDNA 4 workstation)
+  // Source: AMD Radeon AI PRO R9700 product page — 64 CUs, 32 GB GDDR6, 256-bit, 640 GB/s
+  "Radeon AI PRO R9700": { vram: 32, bw: 640, cores: 4096 },
 
   // AMD Discrete Laptop GPUs (RX 7000M/S)
   // Source: AMD official product specs
@@ -1088,6 +1104,7 @@ export async function detectHardware(): Promise<HardwareInfo> {
   let memoryBandwidth: number | null = null;
   let deviceName: string | null = null;
   let gpuCores: number | null = null;
+  let isUnifiedMemory = false;
 
   if (platform === "iOS") {
     const iosDevice = detectIOSDevice(cpuBenchmark);
@@ -1108,6 +1125,14 @@ export async function detectHardware(): Promise<HardwareInfo> {
     totalUsableRAM = appleMatch.ram;
     memoryBandwidth = appleMatch.bw;
     gpuCores = appleMatch.gpuCores;
+  } else if (gpuMatch && gpuMatch.vram === 0 && parsedVRAM == null) {
+    // Catalog iGPUs have no dedicated VRAM. navigator.deviceMemory caps at 8,
+    // so a cap at or above 8 GB is stored as 16 GB and the user can correct it.
+    isUnifiedMemory = true;
+    estimatedVRAM = null;
+    memoryBandwidth = gpuMatch.bw;
+    gpuCores = gpuMatch.cores;
+    totalUsableRAM = deviceMemory == null ? 16 : deviceMemory >= 8 ? 16 : deviceMemory;
   } else if (gpuMatch) {
     estimatedVRAM = parsedVRAM ?? gpuMatch.vram;
     memoryBandwidth = gpuMatch.bw;
@@ -1127,7 +1152,7 @@ export async function detectHardware(): Promise<HardwareInfo> {
   }
 
   // Fallback: estimate VRAM via WebGPU maxBufferSize for discrete desktop GPUs
-  if (!estimatedVRAM && !isApple && !isMobile && webgpuInfo.adapter) {
+  if (!estimatedVRAM && !isApple && !isMobile && !isUnifiedMemory && webgpuInfo.adapter) {
     const webgpuVRAM = estimateVRAMFromWebGPU(webgpuInfo.adapter);
     if (webgpuVRAM) {
       estimatedVRAM = webgpuVRAM;
@@ -1176,7 +1201,7 @@ export async function detectHardware(): Promise<HardwareInfo> {
   // Apple Silicon: unified memory, no offloading possible
   // navigator.deviceMemory caps at 8 — we can only distinguish ≥8 GB vs <8 GB
   let systemRAM: number | null;
-  if (isApple || isMobile) {
+  if (isApple || isMobile || isUnifiedMemory) {
     systemRAM = null;
   } else if (deviceMemory != null) {
     systemRAM = deviceMemory >= 8 ? 16 : 4;
@@ -1197,6 +1222,7 @@ export async function detectHardware(): Promise<HardwareInfo> {
     webgpuDevice: webgpuInfo.device,
     webgpuArch: webgpuInfo.arch,
     isAppleSilicon: isApple,
+    isUnifiedMemory,
     totalUsableRAM,
     platform,
     cpuBenchmark,
@@ -1207,6 +1233,35 @@ export async function detectHardware(): Promise<HardwareInfo> {
 
 // ── Evaluation ─────────────────────────────────────────────
 
+export function usesUnifiedMemory(hw: Pick<HardwareInfo, "isAppleSilicon" | "isMobile" | "isUnifiedMemory">): boolean {
+  return Boolean(hw.isAppleSilicon || hw.isMobile || hw.isUnifiedMemory);
+}
+
+/** Apple Silicon, phones, and SBCs keep the catalog bandwidth. */
+export function bandwidthIsLocked(hw: Pick<HardwareInfo, "isAppleSilicon" | "isMobile" | "isSbc">): boolean {
+  return Boolean(hw.isAppleSilicon || hw.isMobile || hw.isSbc);
+}
+
+const MAX_IDENTICAL_GPUS = 8;
+
+/** Identical discrete GPUs. Shared-memory devices always count as one pool. */
+export function acceleratorCount(hw: HardwareInfo): number {
+  if (usesUnifiedMemory(hw) || hw.isSbc) return 1;
+  const count = hw.gpuCount ?? 1;
+  if (!Number.isFinite(count) || count < 1) return 1;
+  return Math.min(MAX_IDENTICAL_GPUS, Math.round(count));
+}
+
+function dedicatedVramGB(hw: HardwareInfo): number | null {
+  if (hw.estimatedVRAM == null || hw.estimatedVRAM <= 0) return hw.estimatedVRAM;
+  return hw.estimatedVRAM * acceleratorCount(hw);
+}
+
+function scaledBandwidth(hw: HardwareInfo): number | null {
+  if (hw.memoryBandwidth == null) return null;
+  return hw.memoryBandwidth * acceleratorCount(hw);
+}
+
 export function evaluateModel(vramNeeded: number, hw: HardwareInfo): ModelStatus {
   // Mobile (non-Apple-Silicon): OS reserves 45-50% of RAM
   if (hw.isMobile && !hw.isAppleSilicon && hw.totalUsableRAM) {
@@ -1216,19 +1271,21 @@ export function evaluateModel(vramNeeded: number, hw: HardwareInfo): ModelStatus
     if (vramNeeded <= usable) return "tight";
     return "cannot-run";
   }
-  if (hw.isAppleSilicon && hw.totalUsableRAM) {
+  // Apple Silicon, integrated GPUs, and SBCs share one memory pool.
+  if ((hw.isAppleSilicon || hw.isUnifiedMemory) && hw.totalUsableRAM) {
     const usable = hw.totalUsableRAM * 0.75;
     if (vramNeeded <= usable * 0.7) return "can-run";
     if (vramNeeded <= usable) return "tight";
     return "cannot-run";
   }
-  if (hw.estimatedVRAM) {
-    if (vramNeeded <= hw.estimatedVRAM * 0.85) return "can-run";
-    if (vramNeeded <= hw.estimatedVRAM * 1.1) return "tight";
+  const vram = dedicatedVramGB(hw);
+  if (vram) {
+    if (vramNeeded <= vram * 0.85) return "can-run";
+    if (vramNeeded <= vram * 1.1) return "tight";
     // Doesn't fit in VRAM — check CPU offloading via system RAM
-    if (hw.systemRAM && hw.systemRAM > hw.estimatedVRAM) {
+    if (hw.systemRAM && hw.systemRAM > vram) {
       const usableRAM = hw.systemRAM * 0.70;
-      const totalOffload = hw.estimatedVRAM + usableRAM;
+      const totalOffload = vram + usableRAM;
       if (vramNeeded <= totalOffload) return "can-run-slow";
     }
     return "cannot-run";
@@ -1257,11 +1314,12 @@ export function estimateTokensPerSecond(
   hw: HardwareInfo,
   options: TokenSpeedOptions = {},
 ): number | null {
-  if (!hw.memoryBandwidth) return null;
+  const bandwidth = scaledBandwidth(hw);
+  if (!bandwidth) return null;
   let efficiency: number;
   if (hw.isMobile && !hw.isAppleSilicon) {
     efficiency = 0.40;
-  } else if (hw.isAppleSilicon) {
+  } else if (hw.isAppleSilicon || hw.isUnifiedMemory) {
     efficiency = 0.65;
   } else {
     efficiency = 0.70;
@@ -1272,26 +1330,27 @@ export function estimateTokensPerSecond(
     options.residentModelGB ?? modelWorkingSetGB,
   );
 
+  const vram = dedicatedVramGB(hw);
   // If model needs offloading (exceeds VRAM but fits in VRAM+RAM)
-  if (hw.estimatedVRAM && residentModelGB > hw.estimatedVRAM && hw.systemRAM) {
-    const fractionVRAM = Math.min(1, hw.estimatedVRAM / residentModelGB);
+  if (vram && residentModelGB > vram && hw.systemRAM) {
+    const fractionVRAM = Math.min(1, vram / residentModelGB);
     const fractionRAM = 1 - fractionVRAM;
     // Harmonic weighted mean — bottlenecked by the slower path
-    const effectiveBW = 1 / (fractionVRAM / hw.memoryBandwidth + fractionRAM / SYSTEM_RAM_BW_GBS);
+    const effectiveBW = 1 / (fractionVRAM / bandwidth + fractionRAM / SYSTEM_RAM_BW_GBS);
     const toks = (effectiveBW / modelWorkingSetGB) * efficiency * 0.85; // extra penalty for PCIe transfer overhead
     return Math.max(1, Math.round(toks));
   }
 
-  const toks = (hw.memoryBandwidth / modelWorkingSetGB) * efficiency;
+  const toks = (bandwidth / modelWorkingSetGB) * efficiency;
   return Math.round(toks);
 }
 
 export function memoryPercentage(vramNeeded: number, hw: HardwareInfo): number | null {
-  if (hw.isMobile || hw.isAppleSilicon) {
+  if (hw.isMobile || hw.isAppleSilicon || hw.isUnifiedMemory) {
     if (!hw.totalUsableRAM) return null;
     return Math.round((vramNeeded / hw.totalUsableRAM) * 100);
   }
-  const vram = hw.estimatedVRAM || hw.totalUsableRAM;
+  const vram = dedicatedVramGB(hw) || hw.totalUsableRAM;
   if (!vram) return null;
   // If offloading, show % of VRAM (will be >100%)
   return Math.round((vramNeeded / vram) * 100);
@@ -1430,6 +1489,9 @@ export interface HardwareOverrides {
   gpuCores?: number;
   isAppleSilicon?: boolean;
   isMobile?: boolean;
+  isUnifiedMemory?: boolean;
+  isSbc?: boolean;
+  gpuCount?: number;
   estimatedVRAM?: number | null;
 }
 
@@ -1452,6 +1514,9 @@ export function saveHardwareOverrides(overrides: HardwareOverrides): void {
     if (overrides.gpuCores !== undefined) clean.gpuCores = overrides.gpuCores;
     if (overrides.isAppleSilicon !== undefined) clean.isAppleSilicon = overrides.isAppleSilicon;
     if (overrides.isMobile !== undefined) clean.isMobile = overrides.isMobile;
+    if (overrides.isUnifiedMemory !== undefined) clean.isUnifiedMemory = overrides.isUnifiedMemory;
+    if (overrides.isSbc !== undefined) clean.isSbc = overrides.isSbc;
+    if (overrides.gpuCount !== undefined && overrides.gpuCount > 1) clean.gpuCount = overrides.gpuCount;
     if (overrides.estimatedVRAM !== undefined) clean.estimatedVRAM = overrides.estimatedVRAM;
     if (Object.keys(clean).length === 0) {
       localStorage.removeItem(HW_OVERRIDE_KEY);
@@ -1467,12 +1532,17 @@ export function applyOverrides(hw: HardwareInfo, overrides?: HardwareOverrides):
   const result = { ...hw };
   if (o.isAppleSilicon !== undefined) result.isAppleSilicon = o.isAppleSilicon;
   if (o.isMobile !== undefined) result.isMobile = o.isMobile;
+  if (o.isUnifiedMemory !== undefined) result.isUnifiedMemory = o.isUnifiedMemory;
+  if (o.isSbc !== undefined) result.isSbc = o.isSbc;
+  if (o.gpuCount !== undefined) result.gpuCount = o.gpuCount;
+  else delete result.gpuCount;
   if (o.estimatedVRAM !== undefined) result.estimatedVRAM = o.estimatedVRAM;
   if (o.ramGB !== undefined) {
     result.ramGB = o.ramGB;
     result.totalUsableRAM = o.ramGB;
   }
   if (o.systemRAM !== undefined) result.systemRAM = o.systemRAM;
+  if (result.isAppleSilicon || result.isMobile || result.isUnifiedMemory) result.systemRAM = null;
   if (o.memoryBandwidth !== undefined) result.memoryBandwidth = o.memoryBandwidth;
   if (o.gpuCores !== undefined) result.gpuCores = o.gpuCores;
   return result;
@@ -1490,6 +1560,8 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
       gpuCores: data.gpuCores,
       isAppleSilicon: true,
       isMobile: false,
+      isUnifiedMemory: false,
+      isSbc: false,
       estimatedVRAM: null,
     };
   }
@@ -1497,6 +1569,19 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
     const name = deviceKey.slice(4);
     const data = GPU_DB[name];
     if (!data) return null;
+    if (data.vram === 0) {
+      return {
+        device: deviceKey,
+        ramGB: 16,
+        memoryBandwidth: data.bw,
+        gpuCores: data.cores,
+        isAppleSilicon: false,
+        isMobile: false,
+        isUnifiedMemory: true,
+        isSbc: false,
+        estimatedVRAM: null,
+      };
+    }
     return {
       device: deviceKey,
       ramGB: data.vram,
@@ -1504,6 +1589,8 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
       gpuCores: data.cores,
       isAppleSilicon: false,
       isMobile: false,
+      isUnifiedMemory: false,
+      isSbc: false,
       estimatedVRAM: data.vram,
       systemRAM: 16,
     };
@@ -1518,6 +1605,9 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
       memoryBandwidth: data.bw,
       isAppleSilicon: false,
       isMobile: true,
+      isUnifiedMemory: false,
+      isSbc: false,
+      estimatedVRAM: null,
     };
   }
   if (deviceKey.startsWith("sbc:")) {
@@ -1530,13 +1620,16 @@ export function getDeviceOverrides(deviceKey: string): HardwareOverrides | null 
       memoryBandwidth: data.bw,
       isAppleSilicon: false,
       isMobile: false,
+      isUnifiedMemory: true,
+      isSbc: true,
       estimatedVRAM: null,
     };
   }
   return null;
 }
 
-export const RAM_OPTIONS = [2, 4, 6, 8, 12, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
+export const RAM_OPTIONS = [2, 4, 6, 8, 10, 12, 16, 18, 20, 24, 32, 36, 40, 48, 64, 80, 96, 128, 192, 256, 384, 512, 768, 1024];
+export const GPU_COUNT_OPTIONS = [1, 2, 3, 4, 6, 8];
 export const SYSTEM_RAM_OPTIONS = [4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
 export const BW_OPTIONS = [50, 68, 100, 120, 150, 153, 170, 200, 224, 256, 273, 288, 300, 307, 346, 360, 408, 432, 448, 456, 504, 546, 608, 614, 672, 768, 819, 960, 1008, 1024, 1200, 1792, 2039, 3350, 4000];
 export function buildSelectOptions(presets: number[], detected: number | null): number[] {
@@ -1558,6 +1651,7 @@ export function getGPUCategory(name: string): string {
   if (name.startsWith("GTX 16")) return "NVIDIA GTX 16";
   if (name.startsWith("GTX 10")) return "NVIDIA GTX 10";
   if (name.startsWith("GTX 9")) return "NVIDIA GTX 9";
+  if (/^Radeon (AI )?PRO\b/.test(name)) return "AMD Pro";
   if (name.startsWith("RX 9")) return "AMD RX 9000";
   if (name.startsWith("RX 7")) return "AMD RX 7000";
   if (name.startsWith("RX 6")) return "AMD RX 6000";
@@ -1573,6 +1667,6 @@ export function getGPUCategory(name: string): string {
 export const DEVICE_CATEGORY_ORDER = [
   "Apple Silicon", "NVIDIA RTX 50", "NVIDIA RTX 40", "NVIDIA RTX 30", "NVIDIA RTX 20",
   "NVIDIA GTX 16", "NVIDIA GTX 10", "NVIDIA GTX 9", "NVIDIA Pro", "NVIDIA Datacenter",
-  "AMD RX 9000", "AMD RX 7000", "AMD RX 6000", "AMD RX 5000", "AMD Older", "AMD Integrated",
+  "AMD RX 9000", "AMD Pro", "AMD RX 7000", "AMD RX 6000", "AMD RX 5000", "AMD Older", "AMD Integrated",
   "Intel Arc", "Intel Integrated", "Mobile", "SBC / Embedded",
 ];

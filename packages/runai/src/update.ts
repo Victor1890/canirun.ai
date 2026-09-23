@@ -75,7 +75,8 @@ function toUpdateCheck(latest: string, current = RUNAI_VERSION): UpdateCheck {
 export function isSourceCheckout(cliPath = process.argv[1] ?? ""): boolean {
   const normalized = cliPath.replaceAll("\\", "/");
   return normalized.includes("/packages/runai/src/")
-    || normalized.endsWith("/src/cli.ts");
+    || normalized.endsWith("/src/cli.ts")
+    || normalized.includes("/packages/runai/dist/cli.js");
 }
 
 async function readCache(path = RUNAI_UPDATE_CACHE_PATH): Promise<UpdateCache | null> {

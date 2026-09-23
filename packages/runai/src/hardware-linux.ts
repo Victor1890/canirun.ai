@@ -128,11 +128,41 @@ export function parseNvidiaSmi(output: string): LinuxGpuInfo | null {
   };
 }
 
-export function parseLspciGpu(output: string): Omit<LinuxGpuInfo, "vramMB" | "bandwidthGBs" | "backend"> | null {
-  const candidates = output.split("\n").filter((line) => /\b(VGA compatible controller|3D controller|Display controller)\b/i.test(line));
-  const line = candidates.find((value) => /\b(?:NVIDIA|AMD|ATI)\b/i.test(value)) ?? candidates[0];
-  if (!line) return null;
+export interface ParsedLspciGpu extends Omit<LinuxGpuInfo, "vramMB" | "bandwidthGBs" | "backend"> {
+  pciAddress: string | null;
+}
 
+export function normalizePciAddress(raw: string): string | null {
+  const text = raw.trim().toLowerCase();
+  const full = text.match(/([0-9a-f]{4,8}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-9a-f])/);
+  if (full) {
+    return `${full[1]!.slice(-4)}:${full[2]}:${full[3]}.${full[4]}`;
+  }
+  const short = text.match(/(?:^|\s)([0-9a-f]{2}):([0-9a-f]{2})\.([0-9a-f])/);
+  if (!short) return null;
+  return `0000:${short[1]}:${short[2]}.${short[3]}`;
+}
+
+export interface DrmVramCard {
+  pciAddress: string | null;
+  vramBytes: number;
+}
+
+/** VRAM for the card that matches `pciAddress`. One card and no address still counts. */
+export function selectVramForPci(cards: DrmVramCard[], pciAddress: string | null): number | null {
+  const positive = cards.filter((card) => Number.isFinite(card.vramBytes) && card.vramBytes > 0);
+  if (pciAddress) {
+    const target = normalizePciAddress(pciAddress);
+    if (!target) return null;
+    const card = positive.find((entry) => entry.pciAddress != null && normalizePciAddress(entry.pciAddress) === target);
+    if (!card) return null;
+    return Math.round(card.vramBytes / (1024 * 1024));
+  }
+  if (positive.length === 1) return Math.round(positive[0]!.vramBytes / (1024 * 1024));
+  return null;
+}
+
+function parseLspciLine(line: string): ParsedLspciGpu | null {
   const vendor: LinuxGpuInfo["vendor"] = /\bNVIDIA\b/i.test(line)
     ? "NVIDIA"
     : /\b(?:AMD|ATI|Advanced Micro Devices)\b/i.test(line)
@@ -142,11 +172,29 @@ export function parseLspciGpu(output: string): Omit<LinuxGpuInfo, "vramMB" | "ba
     .replace(/^.*?\b(?:VGA compatible controller|3D controller|Display controller)\s*:\s*/i, "")
     .replace(/\s*\(rev [^)]+\)\s*$/i, "")
     .trim();
+  const address = line.match(/^([0-9a-fA-F:.]+)\s/)?.[1] ?? null;
   return {
     name: name || `${vendor} GPU`,
     vendor,
     integrated: vendor === "Intel" || /\bintegrated\b|\bAPU\b/i.test(line),
+    pciAddress: address ? normalizePciAddress(address) : null,
   };
+}
+
+function lspciPreference(gpu: ParsedLspciGpu): number {
+  const catalog = matchGPU(gpu.name);
+  if (catalog && catalog.vram > 0) return 1000 + catalog.vram;
+  if (gpu.vendor === "NVIDIA") return 300;
+  if (gpu.vendor === "AMD" && !(catalog && catalog.vram === 0) && !gpu.integrated) return 200;
+  if (catalog && catalog.vram === 0) return 10;
+  return 50;
+}
+
+export function parseLspciGpu(output: string): ParsedLspciGpu | null {
+  const lines = output.split("\n").filter((line) => /\b(VGA compatible controller|3D controller|Display controller)\b/i.test(line));
+  const gpus = lines.map(parseLspciLine);
+  if (gpus.length === 0) return null;
+  return gpus.reduce((best, gpu) => (lspciPreference(gpu) > lspciPreference(best) ? gpu : best));
 }
 
 function detectNvidiaGpu(isWsl: boolean): LinuxGpuInfo | null {
@@ -172,42 +220,55 @@ function detectAmdVramFromRocmSmi(): number | null {
   return null;
 }
 
-// Read total VRAM the amdgpu kernel driver exposes in sysfs. rocm-smi is
-// frequently absent on consumer setups, so this is the fallback path. We take
-// the largest card to prefer a discrete GPU over an integrated one's small
-// carveout. Multi-dGPU rigs would need per-card selection.
-function detectAmdVramFromSysfs(): number | null {
+// Read per-card VRAM from the amdgpu sysfs nodes. The PCI address comes from
+// the device uevent so a machine with an APU and a discrete GPU does not
+// assign one card's memory to the other.
+function readDrmVramCards(): DrmVramCard[] {
   try {
     const base = "/sys/class/drm";
     const cards = readdirSync(base).filter((name) => /^card\d+$/.test(name));
-    let maxMB = 0;
+    const found: DrmVramCard[] = [];
     for (const card of cards) {
       try {
         const raw = readFileSync(`${base}/${card}/device/mem_info_vram_total`, "utf8").trim();
         const bytes = Number.parseInt(raw, 10);
-        if (Number.isFinite(bytes) && bytes > 0) {
-          maxMB = Math.max(maxMB, Math.round(bytes / (1024 * 1024)));
+        if (!Number.isFinite(bytes) || bytes <= 0) continue;
+        let pciAddress: string | null = null;
+        try {
+          const uevent = readFileSync(`${base}/${card}/device/uevent`, "utf8");
+          pciAddress = uevent.match(/^PCI_SLOT_NAME=(.+)$/m)?.[1]?.trim() ?? null;
+        } catch {
+          // A single-card machine can still use the lone mem_info value.
         }
+        found.push({ pciAddress, vramBytes: bytes });
       } catch {
         // Not an amdgpu-backed card (no mem_info_vram_total); skip it.
       }
     }
-    return maxMB > 0 ? maxMB : null;
+    return found;
   } catch {
-    return null;
+    return [];
   }
 }
 
-function detectAmdVram(gpuName: string): { vramMB: number | null; hasRocm: boolean } {
+function detectAmdVram(gpu: ParsedLspciGpu): { vramMB: number | null; hasRocm: boolean } {
+  const hasRocm = Bun.which("rocm-smi") != null;
+  const catalog = matchGPU(gpu.name);
+  // Known iGPUs advertise a GTT carveout in sysfs. That is shared memory,
+  // not dedicated VRAM. An unmatched card must not inherit another GPU's memory.
+  if ((catalog && catalog.vram === 0) || gpu.integrated) {
+    return { vramMB: null, hasRocm };
+  }
+
+  const cards = readDrmVramCards();
+  const matched = selectVramForPci(cards, gpu.pciAddress)
+    ?? (cards.length === 1 ? selectVramForPci(cards, null) : null);
+  if (matched != null) return { vramMB: matched, hasRocm };
+  if (gpu.pciAddress) return { vramMB: null, hasRocm };
+
   const rocmVramMB = detectAmdVramFromRocmSmi();
   if (rocmVramMB) return { vramMB: rocmVramMB, hasRocm: true };
-
-  // Known iGPUs advertise a small GTT carveout in sysfs; that is shared memory,
-  // not dedicated VRAM. Skip the fallback so we keep treating them as APUs.
-  const catalog = matchGPU(gpuName);
-  if (catalog && catalog.vram === 0) return { vramMB: null, hasRocm: false };
-
-  return { vramMB: detectAmdVramFromSysfs(), hasRocm: false };
+  return { vramMB: null, hasRocm };
 }
 
 export async function detectLinuxHardware(): Promise<CliHardwareInfo> {
@@ -228,8 +289,12 @@ export async function detectLinuxHardware(): Promise<CliHardwareInfo> {
 
   let gpu = detectNvidiaGpu(isWsl);
   if (!gpu && lspciGpu) {
-    const amdVram = lspciGpu.vendor === "AMD" ? detectAmdVram(lspciGpu.name) : null;
-    gpu = enrichLinuxGpu(lspciGpu, amdVram?.vramMB ?? null, amdVram?.hasRocm ?? false);
+    const amdVram = lspciGpu.vendor === "AMD" ? detectAmdVram(lspciGpu) : null;
+    gpu = enrichLinuxGpu({
+      name: lspciGpu.name,
+      vendor: lspciGpu.vendor,
+      integrated: lspciGpu.integrated,
+    }, amdVram?.vramMB ?? null, amdVram?.hasRocm ?? false);
   }
 
   const vramGB = gpu?.vramMB ? Math.round((gpu.vramMB / 1024) * 10) / 10 : null;

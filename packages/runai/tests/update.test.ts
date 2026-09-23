@@ -61,6 +61,7 @@ describe("remote payload parsers", () => {
 describe("isSourceCheckout", () => {
   test("detects a packages/runai source entrypoint", () => {
     expect(isSourceCheckout("/Users/me/canirun.ai/packages/runai/src/cli.ts")).toBe(true);
+    expect(isSourceCheckout("/Users/me/.local/share/runai/src/packages/runai/dist/cli.js")).toBe(true);
     expect(isSourceCheckout("/opt/pnpm/global/5/.pnpm/@canirun+runai@0.2.1/node_modules/@canirun/runai/dist/cli.js")).toBe(false);
   });
 });

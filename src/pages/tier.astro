@@ -20,6 +20,11 @@ import IconCopy from "@/icons/copy.svg";
       <select id="hw-device-select" class="hw-editable-select text-muted" disabled>
         <option value="">Detecting hardware...</option>
       </select>
+      <span id="hw-count-group" class="hidden inline-flex items-center">
+        <span class="text-edge/40 mr-2">·</span>
+        <span data-tooltip="Identical GPUs. VRAM and the speed estimate scale with this count. Mixed cards are not combined." data-tooltip-pos="bottom" tabindex="0" aria-label="GPU count" class="mr-1 inline-flex cursor-help text-muted">GPUs</span>
+        <select id="hw-count-select" class="hw-editable-select"></select>
+      </span>
       <span id="hw-ram-group" class="hidden inline-flex items-center">
         <span class="text-edge/40 mr-2">·</span>
         <span data-tooltip="VRAM — Video memory available for loading models. On Apple Silicon/iGPUs, it's shared with system RAM" data-tooltip-pos="bottom" tabindex="0" aria-label="VRAM info" class="mr-1 inline-flex cursor-help text-muted" id="hw-vram-label">VRAM</span>
@@ -171,9 +176,9 @@ import IconCopy from "@/icons/copy.svg";
 </Layout>
 
 <script>
-  import { detectHardware, evaluateModelComplete, cleanGPUName, getDisplayName, getHardwareOverrides, saveHardwareOverrides, applyOverrides, getDeviceOverrides, RAM_OPTIONS, BW_OPTIONS, GRADES } from "@/lib/hardware";
+  import { detectHardware, evaluateModelComplete, cleanGPUName, getDisplayName, getHardwareOverrides, saveHardwareOverrides, applyOverrides, getDeviceOverrides, bandwidthIsLocked, usesUnifiedMemory, RAM_OPTIONS, BW_OPTIONS, GRADES } from "@/lib/hardware";
   import type { HardwareInfo, HardwareOverrides } from "@/lib/hardware";
-  import { fitSelectWidth, populateSelect, appendDeviceOptgroups } from "@/lib/hardware-ui";
+  import { fitSelectWidth, populateSelect, populateCountSelect, appendDeviceOptgroups, setSelectEnabled, openCustomNumberInput, CUSTOM_SELECT_VALUE } from "@/lib/hardware-ui";
   import { enhanceDeviceSelect } from "@/lib/device-picker";
 
   interface TierModel {
@@ -390,7 +395,7 @@ import IconCopy from "@/icons/copy.svg";
     if (sysramGroup && sysramSelect) {
       if (hw.isMobile) {
         sysramGroup.classList.add("hidden");
-      } else if (hw.isAppleSilicon) {
+      } else if (hw.isAppleSilicon || hw.isUnifiedMemory) {
         sysramGroup.classList.remove("hidden");
         sysramSelect.innerHTML = "";
         const opt = document.createElement("option");
@@ -401,7 +406,12 @@ import IconCopy from "@/icons/copy.svg";
         sysramSelect.classList.add("opacity-50", "cursor-not-allowed");
         fitSelectWidth(sysramSelect);
         if (sysramLabel) {
-          sysramLabel.setAttribute("data-tooltip", "Unified memory — Apple Silicon shares RAM between CPU and GPU. No separate system RAM available for offloading");
+          sysramLabel.setAttribute(
+            "data-tooltip",
+            hw.isAppleSilicon
+              ? "Unified memory — Apple Silicon shares RAM between CPU and GPU. No separate system RAM available for offloading"
+              : "Unified memory — this GPU shares system RAM. There is no separate VRAM to offload from",
+          );
         }
       } else {
         sysramGroup.classList.remove("hidden");
@@ -445,12 +455,27 @@ import IconCopy from "@/icons/copy.svg";
     const effectiveBw = hw.memoryBandwidth;
     if (effectiveBw) {
       document.getElementById("hw-bw-group")!.classList.remove("hidden");
+      const bwSelect = document.getElementById("hw-bw-select") as HTMLSelectElement;
       populateSelect(
-        document.getElementById("hw-bw-select") as HTMLSelectElement,
+        bwSelect,
         BW_OPTIONS, detectedHW.memoryBandwidth, overrides.memoryBandwidth ?? effectiveBw, (v) => `~${v} GB/s`
       );
+      setSelectEnabled(bwSelect, !bandwidthIsLocked(hw));
     } else {
       document.getElementById("hw-bw-group")!.classList.add("hidden");
+    }
+
+    const countGroup = document.getElementById("hw-count-group");
+    const countSelect = document.getElementById("hw-count-select") as HTMLSelectElement | null;
+    if (countGroup && countSelect) {
+      if (usesUnifiedMemory(hw)) {
+        countGroup.classList.add("hidden");
+        setSelectEnabled(countSelect, false);
+      } else {
+        countGroup.classList.remove("hidden");
+        populateCountSelect(countSelect, overrides.gpuCount ?? hw.gpuCount ?? 1);
+        setSelectEnabled(countSelect, true);
+      }
     }
 
     if (hw.gpuCores) {
@@ -461,9 +486,10 @@ import IconCopy from "@/icons/copy.svg";
     }
 
     const parts: string[] = [getDisplayName(hw)];
-    if (hw.ramGB) parts.push(`${hw.ramGB} GB VRAM`);
-    if (hw.systemRAM && !hw.isAppleSilicon && !hw.isMobile) parts.push(`${hw.systemRAM} GB RAM`);
-    if (hw.isAppleSilicon && hw.totalUsableRAM) parts.push(`${hw.totalUsableRAM} GB unified`);
+    if (hw.ramGB) parts.push(`${hw.ramGB} GB ${usesUnifiedMemory(hw) ? "unified" : "VRAM"}`);
+    if ((hw.gpuCount ?? 1) > 1) parts.push(`×${hw.gpuCount}`);
+    if (hw.systemRAM && !usesUnifiedMemory(hw)) parts.push(`${hw.systemRAM} GB RAM`);
+    if (hw.isAppleSilicon && hw.totalUsableRAM && !hw.ramGB) parts.push(`${hw.totalUsableRAM} GB unified`);
     if (hw.memoryBandwidth) parts.push(`~${hw.memoryBandwidth} GB/s`);
     if (hw.gpuCores) parts.push(`${hw.gpuCores.toLocaleString()} cores`);
     document.getElementById("tier-hw-label")!.textContent = parts.join(" | ");
@@ -499,7 +525,14 @@ import IconCopy from "@/icons/copy.svg";
     const deviceOverrides = getDeviceOverrides(deviceKey);
     if (!deviceOverrides) return;
     const prev = getHardwareOverrides();
-    if (prev.systemRAM !== undefined) deviceOverrides.systemRAM = prev.systemRAM;
+    if (
+      prev.systemRAM !== undefined
+      && !deviceOverrides.isAppleSilicon
+      && !deviceOverrides.isMobile
+      && !deviceOverrides.isUnifiedMemory
+    ) {
+      deviceOverrides.systemRAM = prev.systemRAM;
+    }
     saveHardwareOverrides(deviceOverrides);
     currentHW = applyOverrides(detectedHW, deviceOverrides);
     updateHardwareBar(currentHW);
@@ -516,11 +549,29 @@ import IconCopy from "@/icons/copy.svg";
       handleDeviceChange(deviceSelect.value);
     });
 
+    function readSelectNumber(select: HTMLSelectElement | null): number | null {
+      if (!select || select.disabled || select.value === CUSTOM_SELECT_VALUE || select.value === "") return null;
+      const value = Number(select.value);
+      return Number.isFinite(value) && value > 0 ? value : null;
+    }
+
     function handleFieldChange() {
       const overrides = getHardwareOverrides();
-      if (ramSelect?.value) overrides.ramGB = Number(ramSelect.value);
-      if (sysramSelect?.value) overrides.systemRAM = Number(sysramSelect.value);
-      if (bwSelect?.value) overrides.memoryBandwidth = Number(bwSelect.value);
+      const memoryGB = readSelectNumber(ramSelect);
+      if (memoryGB) {
+        overrides.ramGB = memoryGB;
+        overrides.estimatedVRAM = usesUnifiedMemory(currentHW) ? null : memoryGB;
+      }
+      const systemRAM = readSelectNumber(sysramSelect);
+      if (systemRAM && !usesUnifiedMemory(currentHW)) overrides.systemRAM = systemRAM;
+      const bandwidth = readSelectNumber(bwSelect);
+      if (bandwidth && bwSelect && !bwSelect.disabled) overrides.memoryBandwidth = bandwidth;
+      const countSelect = document.getElementById("hw-count-select") as HTMLSelectElement | null;
+      const gpuCount = readSelectNumber(countSelect);
+      if (gpuCount && countSelect && !countSelect.disabled) {
+        if (gpuCount > 1) overrides.gpuCount = gpuCount;
+        else delete overrides.gpuCount;
+      }
       if (!overrides.device || overrides.device === "auto") {
         overrides.device = "custom";
         const ds = document.getElementById("hw-device-select") as HTMLSelectElement;
@@ -532,9 +583,35 @@ import IconCopy from "@/icons/copy.svg";
       evaluateAndRender();
     }
 
-    ramSelect?.addEventListener("change", () => { handleFieldChange(); fitSelectWidth(ramSelect); });
+    function bindNumericSelect(
+      select: HTMLSelectElement | null,
+      spec: { min: number; max: number; format: (value: number) => string },
+    ) {
+      select?.addEventListener("change", () => {
+        if (!select) return;
+        if (select.value === CUSTOM_SELECT_VALUE) {
+          openCustomNumberInput(select, {
+            min: spec.min,
+            max: spec.max,
+            format: spec.format,
+            onCommit: () => { handleFieldChange(); fitSelectWidth(select); },
+            onCancel: () => fitSelectWidth(select),
+          });
+          return;
+        }
+        handleFieldChange();
+        fitSelectWidth(select);
+      });
+    }
+
+    bindNumericSelect(ramSelect, { min: 1, max: 1024, format: (value) => `${value} GB` });
+    bindNumericSelect(bwSelect, { min: 1, max: 20000, format: (value) => `~${value} GB/s` });
     sysramSelect?.addEventListener("change", () => { handleFieldChange(); fitSelectWidth(sysramSelect); });
-    bwSelect?.addEventListener("change", () => { handleFieldChange(); fitSelectWidth(bwSelect); });
+    document.getElementById("hw-count-select")?.addEventListener("change", () => {
+      handleFieldChange();
+      const countSelect = document.getElementById("hw-count-select") as HTMLSelectElement | null;
+      if (countSelect) fitSelectWidth(countSelect);
+    });
   }
 
   async function init() {

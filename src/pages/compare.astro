@@ -199,6 +199,9 @@ const sortedModels = [...models].sort(
       webgpuDevice: null,
       webgpuArch: null,
       isAppleSilicon: overrides.isAppleSilicon ?? false,
+      isUnifiedMemory: overrides.isUnifiedMemory,
+      isSbc: overrides.isSbc,
+      gpuCount: overrides.gpuCount,
       totalUsableRAM: overrides.ramGB ?? null,
       platform: null,
       cpuBenchmark: null,
@@ -221,7 +224,7 @@ const sortedModels = [...models].sort(
   function renderSpecs(container: HTMLElement, deviceKey: string, hw: HardwareInfo) {
     const label = getDeviceLabel(deviceKey);
     const parts: string[] = [`<strong class="text-primary">${label}</strong>`];
-    if (hw.ramGB) parts.push(`${hw.ramGB} GB ${hw.isAppleSilicon ? "Unified" : "VRAM"}`);
+    if (hw.ramGB) parts.push(`${hw.ramGB} GB ${hw.isAppleSilicon || hw.isUnifiedMemory ? "unified" : "VRAM"}${hw.gpuCount && hw.gpuCount > 1 ? ` ×${hw.gpuCount}` : ""}`);
     if (hw.memoryBandwidth) parts.push(`~${hw.memoryBandwidth} GB/s`);
     if (hw.gpuCores) parts.push(`${hw.gpuCores.toLocaleString()} cores`);
     container.innerHTML = parts.join(' <span class="text-edge">·</span> ');

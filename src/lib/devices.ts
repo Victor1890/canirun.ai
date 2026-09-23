@@ -80,6 +80,7 @@ const FAMILIES: {
     vendors: ["amd"],
     categories: [
       "AMD RX 9000",
+      "AMD Pro",
       "AMD RX 7000",
       "AMD RX 6000",
       "AMD RX 5000",
@@ -119,6 +120,7 @@ export function categoryToId(category: string): string {
 }
 
 export function formatMemory(device: DeviceListing): string | null {
+  if (device.memoryKind === "unified" && device.memoryGB == null) return "shared memory"
   if (device.memoryGB == null) return null
   if (device.memoryKind === "vram") return `${device.memoryGB} GB VRAM`
   if (device.memoryKind === "unified") return `${device.memoryGB} GB unified`
@@ -216,12 +218,13 @@ function toListing(entry: DeviceSlugEntry): DeviceListing {
     const name = entry.key.slice(4)
     const data = GPU_DB[name]
     const category = getGPUCategory(name)
+    const shared = data?.vram === 0
     return {
       ...entry,
       category,
       vendor: vendorForGpu(category),
-      memoryGB: data?.vram ?? null,
-      memoryKind: "vram",
+      memoryGB: shared ? null : data?.vram ?? null,
+      memoryKind: shared ? "unified" : "vram",
       bandwidth: data?.bw ?? 0,
     }
   }

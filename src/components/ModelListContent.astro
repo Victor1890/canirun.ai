@@ -168,6 +168,20 @@ function timeAgo(dateStr: string | null): string {
           )
         }
       </span>
+      <span id="hw-count" class="hw-spec text-muted hidden">
+        <span
+          data-tooltip="Identical GPUs. VRAM and the speed estimate scale with this count. Mixed cards are not combined."
+          data-tooltip-pos="bottom"
+          tabindex="0"
+          aria-label="GPU count"
+          class="hw-spec-label"
+        >
+          GPUs
+        </span>
+        <select id="hw-count-select" class="hw-editable-select">
+          <option value="1">×1</option>
+        </select>
+      </span>
       <!-- VRAM -->
       <span id="hw-ram" class="hw-spec text-muted">
         <span
@@ -1264,6 +1278,8 @@ function timeAgo(dateStr: string | null): string {
     saveHardwareOverrides,
     applyOverrides,
     getDeviceOverrides,
+    bandwidthIsLocked,
+    usesUnifiedMemory,
     RAM_OPTIONS,
     BW_OPTIONS,
     GRADES as _GRADES,
@@ -1278,7 +1294,11 @@ function timeAgo(dateStr: string | null): string {
   import {
     fitSelectWidth,
     populateSelect,
+    populateCountSelect,
     appendDeviceOptgroups,
+    setSelectEnabled,
+    openCustomNumberInput,
+    CUSTOM_SELECT_VALUE,
   } from "@/lib/hardware-ui"
   import { enhanceDeviceSelect } from "@/lib/device-picker"
   import { deviceKeyToSlug, slugToDeviceKey } from "@/lib/device-slugs"
@@ -1571,7 +1591,7 @@ function timeAgo(dateStr: string | null): string {
         sysramSelect.appendChild(opt)
         sysramSelect.disabled = true
         sysramSelect.classList.add("opacity-50", "cursor-not-allowed")
-      } else if (hw.isAppleSilicon) {
+      } else if (hw.isAppleSilicon || hw.isUnifiedMemory) {
         sysramSelect.innerHTML = ""
         const opt = document.createElement("option")
         opt.value = ""
@@ -1583,7 +1603,9 @@ function timeAgo(dateStr: string | null): string {
         if (sysramTooltip) {
           sysramTooltip.setAttribute(
             "data-tooltip",
-            "Unified memory — Apple Silicon shares RAM between CPU and GPU. No separate system RAM available for offloading",
+            hw.isAppleSilicon
+              ? "Unified memory — Apple Silicon shares RAM between CPU and GPU. No separate system RAM available for offloading"
+              : "Unified memory — this GPU shares system RAM. There is no separate VRAM to offload from",
           )
         }
       } else {
@@ -1640,13 +1662,28 @@ function timeAgo(dateStr: string | null): string {
         overrides.memoryBandwidth ?? effectiveBw,
         (v) => `~${v} GB/s`,
       )
+      setSelectEnabled(bwSelect, !bandwidthIsLocked(hw))
     } else if (bwSelect) {
       bwSelect.innerHTML = ""
       const opt = document.createElement("option")
       opt.value = ""
       opt.textContent = "—"
       bwSelect.appendChild(opt)
-      bwSelect.disabled = true
+      setSelectEnabled(bwSelect, false)
+    }
+
+    const countWrap = $("#hw-count")
+    const countSelect = $<HTMLSelectElement>("#hw-count-select")
+    if (countWrap && countSelect) {
+      const showCount = !usesUnifiedMemory(hw)
+      countWrap.classList.toggle("hidden", !showCount)
+      if (showCount) {
+        countWrap.classList.replace("text-muted", "text-secondary")
+        populateCountSelect(countSelect, overrides.gpuCount ?? hw.gpuCount ?? 1)
+        setSelectEnabled(countSelect, true)
+      } else {
+        setSelectEnabled(countSelect, false)
+      }
     }
 
     const coresEl = $("#hw-gpu-cores")
@@ -1697,7 +1734,14 @@ function timeAgo(dateStr: string | null): string {
     if (!deviceOverrides) return
 
     const prev = getHardwareOverrides()
-    if (prev.systemRAM !== undefined) deviceOverrides.systemRAM = prev.systemRAM
+    if (
+      prev.systemRAM !== undefined
+      && !deviceOverrides.isAppleSilicon
+      && !deviceOverrides.isMobile
+      && !deviceOverrides.isUnifiedMemory
+    ) {
+      deviceOverrides.systemRAM = prev.systemRAM
+    }
 
     saveHardwareOverrides(deviceOverrides)
     currentHW = applyOverrides(detectedHW, deviceOverrides)
@@ -1724,12 +1768,30 @@ function timeAgo(dateStr: string | null): string {
       handleDeviceChange(deviceSelect.value)
     })
 
+    function readSelectNumber(select: HTMLSelectElement | null): number | null {
+      if (!select || select.disabled || select.value === CUSTOM_SELECT_VALUE || select.value === "") return null
+      const value = Number(select.value)
+      return Number.isFinite(value) && value > 0 ? value : null
+    }
+
     function handleFieldChange() {
       const overrides = { ...activeOverrides() }
       const lockedKey = document.getElementById("results")?.dataset.deviceKey
-      if (ramSelect?.value) overrides.ramGB = Number(ramSelect.value)
-      if (sysramSelect?.value) overrides.systemRAM = Number(sysramSelect.value)
-      if (bwSelect?.value) overrides.memoryBandwidth = Number(bwSelect.value)
+      const memoryGB = readSelectNumber(ramSelect)
+      if (memoryGB) {
+        overrides.ramGB = memoryGB
+        overrides.estimatedVRAM = usesUnifiedMemory(currentHW) ? null : memoryGB
+      }
+      const systemRAM = readSelectNumber(sysramSelect)
+      if (systemRAM && !usesUnifiedMemory(currentHW)) overrides.systemRAM = systemRAM
+      const bandwidth = readSelectNumber(bwSelect)
+      if (bandwidth && bwSelect && !bwSelect.disabled) overrides.memoryBandwidth = bandwidth
+      const countSelect = $<HTMLSelectElement>("#hw-count-select")
+      const gpuCount = readSelectNumber(countSelect)
+      if (gpuCount && countSelect && !countSelect.disabled) {
+        if (gpuCount > 1) overrides.gpuCount = gpuCount
+        else delete overrides.gpuCount
+      }
       if (!overrides.device || overrides.device === "auto") {
         if (lockedKey) {
           overrides.device = lockedKey
@@ -1748,7 +1810,7 @@ function timeAgo(dateStr: string | null): string {
         saveHardwareOverrides(overrides)
       }
       currentHW = applyOverrides(detectedHW, overrides)
-      if (currentHW.isAppleSilicon && sysramSelect) {
+      if ((currentHW.isAppleSilicon || currentHW.isUnifiedMemory) && sysramSelect) {
         const opt = sysramSelect.options[0]
         if (opt) opt.textContent = `${currentHW.totalUsableRAM ?? "—"} GB`
         fitSelectWidth(sysramSelect)
@@ -1756,17 +1818,40 @@ function timeAgo(dateStr: string | null): string {
       updateAllCards(currentHW)
     }
 
-    ramSelect?.addEventListener("change", () => {
-      handleFieldChange()
-      fitSelectWidth(ramSelect)
-    })
+    function bindNumericSelect(
+      select: HTMLSelectElement | null,
+      spec: { min: number; max: number; format: (value: number) => string },
+    ) {
+      select?.addEventListener("change", () => {
+        if (!select) return
+        if (select.value === CUSTOM_SELECT_VALUE) {
+          openCustomNumberInput(select, {
+            min: spec.min,
+            max: spec.max,
+            format: spec.format,
+            onCommit: () => {
+              handleFieldChange()
+              fitSelectWidth(select)
+            },
+            onCancel: () => fitSelectWidth(select),
+          })
+          return
+        }
+        handleFieldChange()
+        fitSelectWidth(select)
+      })
+    }
+
+    bindNumericSelect(ramSelect, { min: 1, max: 1024, format: (value) => `${value} GB` })
+    bindNumericSelect(bwSelect, { min: 1, max: 20000, format: (value) => `~${value} GB/s` })
     sysramSelect?.addEventListener("change", () => {
       handleFieldChange()
       fitSelectWidth(sysramSelect)
     })
-    bwSelect?.addEventListener("change", () => {
+    $<HTMLSelectElement>("#hw-count-select")?.addEventListener("change", () => {
       handleFieldChange()
-      fitSelectWidth(bwSelect)
+      const countSelect = $<HTMLSelectElement>("#hw-count-select")
+      if (countSelect) fitSelectWidth(countSelect)
     })
   }
 
@@ -2651,8 +2736,14 @@ function timeAgo(dateStr: string | null): string {
       const deviceOverrides = getDeviceOverrides(urlDeviceKey)
       if (deviceOverrides) {
         const prev = getHardwareOverrides()
-        if (prev.systemRAM !== undefined)
+        if (
+          prev.systemRAM !== undefined
+          && !deviceOverrides.isAppleSilicon
+          && !deviceOverrides.isMobile
+          && !deviceOverrides.isUnifiedMemory
+        ) {
           deviceOverrides.systemRAM = prev.systemRAM
+        }
         pageOverrides = deviceOverrides
       }
     }
@@ -2852,8 +2943,14 @@ function timeAgo(dateStr: string | null): string {
           const deviceOverrides = getDeviceOverrides(key)
           if (deviceOverrides) {
             const prev = getHardwareOverrides()
-            if (prev.systemRAM !== undefined)
+            if (
+              prev.systemRAM !== undefined
+              && !deviceOverrides.isAppleSilicon
+              && !deviceOverrides.isMobile
+              && !deviceOverrides.isUnifiedMemory
+            ) {
               deviceOverrides.systemRAM = prev.systemRAM
+            }
             pageOverrides = deviceOverrides
             currentHW = applyOverrides(detectedHW, deviceOverrides)
             updateHardwarePanel(currentHW)
@@ -3296,7 +3393,7 @@ function timeAgo(dateStr: string | null): string {
 
   .hw-spec-panel {
     display: grid;
-    grid-template-columns: max-content repeat(4, max-content);
+    grid-template-columns: max-content repeat(5, max-content);
     justify-content: center;
     justify-items: start;
     column-gap: 1.75rem;
@@ -3314,6 +3411,10 @@ function timeAgo(dateStr: string | null): string {
     max-width: 100%;
     min-height: 3.35rem;
     padding: 0.35rem 0;
+  }
+
+  .hw-spec.hidden {
+    display: none;
   }
 
   .hw-spec-label {

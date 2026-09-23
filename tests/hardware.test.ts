@@ -200,6 +200,7 @@ describe("getGPUCategory", () => {
       ["Vega 64", "AMD Older"],
       ["Radeon 780M", "AMD Integrated"],
       ["Ryzen AI MAX+ 395", "AMD Integrated"],
+      ["Radeon AI PRO R9700", "AMD Pro"],
     ])("%s → %s", (name, expected) => {
       expect(getGPUCategory(name)).toBe(expected);
     });
@@ -409,6 +410,58 @@ describe("cleanGPUName", () => {
 });
 
 // ── Apple Silicon detection ──────────────────────────────────
+
+describe("catalog additions and shared memory", () => {
+  it("lists the Radeon AI PRO R9700 from AMD's specs", () => {
+    expect(GPU_DB["Radeon AI PRO R9700"]).toEqual({ vram: 32, bw: 640, cores: 4096 });
+    expect(matchGPU("AMD Radeon AI PRO R9700")?.vram).toBe(32);
+    expect(getDeviceOverrides("gpu:Radeon AI PRO R9700")).toMatchObject({
+      estimatedVRAM: 32,
+      memoryBandwidth: 640,
+      isUnifiedMemory: false,
+    });
+  });
+
+  it("treats catalog iGPUs as one shared pool", () => {
+    expect(getDeviceOverrides("gpu:Vega 7")).toMatchObject({
+      ramGB: 16,
+      memoryBandwidth: 51,
+      estimatedVRAM: null,
+      isUnifiedMemory: true,
+    });
+    expect(applyOverrides(makeHW({ systemRAM: 32 }), getDeviceOverrides("gpu:Vega 7")!).systemRAM).toBeNull();
+    const hw = makeHW({
+      isUnifiedMemory: true,
+      totalUsableRAM: 32,
+      ramGB: 32,
+      estimatedVRAM: null,
+      memoryBandwidth: 26,
+    });
+    expect(evaluateModel(16, hw)).toBe("can-run");
+    expect(evaluateModel(20, hw)).toBe("tight");
+    expect(evaluateModel(30, hw)).toBe("cannot-run");
+  });
+
+  it("scales fit and bandwidth across identical GPUs", () => {
+    const one = makeHW({ estimatedVRAM: 16, memoryBandwidth: 1000, systemRAM: null });
+    const two = makeHW({ estimatedVRAM: 16, memoryBandwidth: 1000, systemRAM: null, gpuCount: 2 });
+    expect(evaluateModel(24, one)).toBe("cannot-run");
+    expect(evaluateModel(24, two)).toBe("can-run");
+    expect(estimateTokensPerSecond(10, two)).toBe((estimateTokensPerSecond(10, one) ?? 0) * 2);
+  });
+
+  it("does not scale a shared-memory device by GPU count", () => {
+    const hw = makeHW({
+      isUnifiedMemory: true,
+      totalUsableRAM: 16,
+      memoryBandwidth: 50,
+      estimatedVRAM: 16,
+      gpuCount: 4,
+    });
+    expect(evaluateModel(20, hw)).toBe("cannot-run");
+    expect(estimateTokensPerSecond(8, hw)).toBe(estimateTokensPerSecond(8, { ...hw, gpuCount: 1 }));
+  });
+});
 
 describe("isAppleSiliconCheck", () => {
   it("detects Apple M1", () => {

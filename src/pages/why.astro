@@ -580,10 +580,12 @@ const codeHF = `<span class="text-muted">// Fetch model stats from HuggingFace A
         </div>
         <p class="mt-3 text-base leading-relaxed text-secondary">
           Efficiency is <span class="font-mono text-primary">0.70</span> for discrete
-          GPUs and <span class="font-mono text-primary">0.65</span> for Apple Silicon
-          (unified memory has slightly more overhead). This gives a conservative estimate
+          GPUs and <span class="font-mono text-primary">0.65</span> for shared memory
+          (Apple Silicon and integrated GPUs). This gives a conservative estimate
           — real-world performance can vary &plusmn;20% depending on batch size, context
-          length, and quantization format.
+          length, and quantization format. With more than one identical GPU, capacity
+          and this bandwidth estimate both scale with that count. Mixed cards are not
+          combined, and the figure does not model NVLink or PCIe overhead.
         </p>
       </section>
 
@@ -669,6 +671,11 @@ const codeHF = `<span class="text-muted">// Fetch model stats from HuggingFace A
           MacBook Pro with 36 GB can run models that need ~27 GB, while a PC
           with an 8 GB GPU cannot. We account for this in our calculations by
           treating Apple Silicon as a single pool with a 75% usable cap.
+          Integrated GPUs and single-board computers use that same shared pool,
+          because they have no separate VRAM to offload into. Phones keep their
+          own, slightly smaller, usable fraction. On a PC the bandwidth control
+          stays editable, since the catalog value assumes a typical memory
+          configuration. Apple Silicon, phones, and SBCs keep the catalog bandwidth.
         </p>
       </section>
 

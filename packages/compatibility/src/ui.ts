@@ -56,8 +56,98 @@ export function populateSelect(
     opt.textContent = formatter(v) + (v === detected ? " ✱" : "");
     select.appendChild(opt);
   }
+  const custom = document.createElement("option");
+  custom.value = CUSTOM_SELECT_VALUE;
+  custom.textContent = "Custom…";
+  select.appendChild(custom);
   select.value = String(override ?? detected ?? "");
+  if (select.value && select.value !== CUSTOM_SELECT_VALUE) {
+    select.dataset.prevValue = select.value;
+  }
   fitSelectWidth(select);
+}
+
+export const CUSTOM_SELECT_VALUE = "__custom__";
+
+export function setSelectEnabled(select: HTMLSelectElement, enabled: boolean): void {
+  select.disabled = !enabled;
+  select.classList.toggle("opacity-50", !enabled);
+  select.classList.toggle("cursor-not-allowed", !enabled);
+}
+
+export function populateCountSelect(select: HTMLSelectElement, count: number): void {
+  const values = [1, 2, 3, 4, 6, 8];
+  const selected = values.includes(count) ? count : 1;
+  select.innerHTML = "";
+  for (const value of values) {
+    const opt = document.createElement("option");
+    opt.value = String(value);
+    opt.textContent = `×${value}`;
+    select.appendChild(opt);
+  }
+  select.value = String(selected);
+  fitSelectWidth(select);
+}
+
+export function openCustomNumberInput(
+  select: HTMLSelectElement,
+  options: {
+    min: number;
+    max: number;
+    format: (value: number) => string;
+    onCommit: (value: number) => void;
+    onCancel: () => void;
+  },
+): void {
+  const previous = select.dataset.prevValue ?? "";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.className = "hw-editable-input";
+  input.min = String(options.min);
+  input.max = String(options.max);
+  input.step = "1";
+  input.inputMode = "numeric";
+  input.setAttribute("aria-label", "Custom value");
+  select.hidden = true;
+  select.insertAdjacentElement("afterend", input);
+  input.focus();
+
+  let settled = false;
+  const finish = (commit: boolean) => {
+    if (settled) return;
+    settled = true;
+    const raw = Number(input.value);
+    input.remove();
+    select.hidden = false;
+    const value = Math.round(raw);
+    if (!commit || !Number.isFinite(raw) || value < options.min || value > options.max) {
+      if (previous) select.value = previous;
+      options.onCancel();
+      return;
+    }
+    const existing = Array.from(select.options).find((opt) => opt.value === String(value));
+    if (!existing) {
+      const opt = document.createElement("option");
+      opt.value = String(value);
+      opt.textContent = options.format(value);
+      const customOpt = Array.from(select.options).find((opt) => opt.value === CUSTOM_SELECT_VALUE);
+      select.insertBefore(opt, customOpt ?? null);
+    }
+    select.value = String(value);
+    select.dataset.prevValue = String(value);
+    options.onCommit(value);
+  };
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
 }
 
 // ── Device Options Grouping ───────────────────────────────
@@ -79,7 +169,8 @@ export function buildGroupedDeviceOptions(): Record<string, DeviceOption[]> {
   for (const [name, data] of Object.entries(GPU_DB)) {
     const cat = getGPUCategory(name);
     if (!grouped[cat]) grouped[cat] = [];
-    grouped[cat].push({ value: `gpu:${name}`, label: `${name} (${data.vram} GB)` });
+    const memory = data.vram > 0 ? `${data.vram} GB` : "shared";
+    grouped[cat].push({ value: `gpu:${name}`, label: `${name} (${memory})` });
   }
 
   for (const [name, data] of Object.entries(MOBILE_GPU_DB)) {
